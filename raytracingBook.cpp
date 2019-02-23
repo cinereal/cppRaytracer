@@ -6,12 +6,24 @@
 #include <fstream>
 #include <random>
 #include <ctime>
+
+//for multiprocessing
+#include <string>
+#include <thread>
+#include <vector>
+//#include <mutex>
+//#include <algorithm>
+#include <future>
+//#include <iterator>
+#include <chrono>
+
 //#include "vec3.h"
 #include "ray.h"
 #include "sphere.h"
 #include "hitable_list.h"
 #include "camera.h"
 #include "material.h"
+
 
 //std::default_random_engine reng;
 //std::mt19937 mt(19);
@@ -78,40 +90,35 @@ hitable *random_scene() {
 	return new hitable_list(list, i);
 }
 
-int main()
-{
-	int nx = 200;
-	int ny = 100;
-	int ns = 4;
-	std::ofstream myfile ("test2.ppm");
+// int& is reference, int is copy
+std::string render_loop_test(int nx, int ny, int y_start, int y_end, int ns, hitable *world, camera cam) {
+	std::string tile_data = "";
+	for (int j = y_end - 1; j >= y_start; j--) {
+		for (int i = 0; i < nx; i++) {
+			vec3 col(0, 0, 0);
+			for (int s = 0; s < ns; s++) {
+				float u = float(i + uni_dist(mt)) / float(nx);
+				float v = float(j + uni_dist(mt)) / float(ny);
+				ray r = cam.get_ray(u, v);
+				// vec3 p = r.point_at_parameter(2.0);
+				col += color(r, world, 0);
+			}
+			col /= float(ns);
+			col = vec3(sqrt(col[0]), sqrt(col[1]), sqrt(col[2]));
+			int ir = int(255.99*col[0]);
+			int ig = int(255.99*col[1]);
+			int ib = int(255.99*col[2]);
+			tile_data += std::to_string(ir) + " " + std::to_string(ig) + " " + std::to_string(ib) + "\n";
+		}
+	}
+	return tile_data;
+}
+
+
+void render_loop(int& nx, int& y_start, int& ny, int& ns, hitable *world, camera& cam) {
+	std::ofstream myfile("test2.ppm");
 	if (myfile.is_open()) {
 		myfile << "P3\n" << nx << " " << ny << "\n255\n";
-
-		//hitable *list[5];
-		//list[0] = new sphere(vec3(0, 0, -1), 0.5, new lambertian(vec3(0.1, 0.2, 0.5)));
-		//list[1] = new sphere(vec3(0, -100.5, -1), 100, new lambertian(vec3(0.8, 0.8, 0.0)));
-		//list[2] = new sphere(vec3(1, 0, -1), 0.5, new metal(vec3(0.8, 0.6, 0.2), 0.2));
-		//list[3] = new sphere(vec3(-1, 0, -1), 0.5, new dielectric(1.5));
-		//list[4] = new sphere(vec3(-1, 0, -1), -0.45, new dielectric(1.5));
-		//hitable *world = new hitable_list(list, 5);
-
-		hitable *world = random_scene();
-
-		//float R = cos(M_PI / 4);
-		//hitable *list[2];
-		//list[0] = new sphere(vec3(-R, 0, -1), R, new lambertian(vec3(0, 0, 1)));
-		//list[1] = new sphere(vec3(R, 0, -1), R, new lambertian(vec3(1, 0, 0)));
-		//hitable *world = new hitable_list(list, 2);
-
-		vec3 lookfrom(13, 2, 3);
-		vec3 lookat(0, 0, 0);
-		//float dist_to_focus = (lookfrom - lookat).length();
-		float dist_to_focus = 10.0;
-		float aperature = 0.1;
-
-		camera cam(lookfrom, lookat, vec3(0, 1, 0), 20, float(nx) / float(ny), aperature, dist_to_focus);
-		
-		size_t start = time(NULL);
 
 		for (int j = ny - 1; j >= 0; j--) {
 			for (int i = 0; i < nx; i++) {
@@ -132,10 +139,118 @@ int main()
 			}
 		}
 		myfile.close();
-
-		printf("**MyProgram::time elapsed= %lds\n", time(NULL) - start);
-
 	}
 	else std::cout << "Unable to open file";
+}
+
+std::string fetchString(std::string recvdData, int thread_seed)
+{
+	// Make sure that function takes 5 seconds to complete
+	std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+	std::string s = "";
+	srand(thread_seed);
+	for (int i = 0; i < 10; i++) {
+		s += std::to_string(rand() % 256) + " " + std::to_string(rand() % 256) + " " + std::to_string(rand() % 256) + "\n";
+	}
+	//Do stuff like creating DB Connection and fetching Data
+	return "DB_" + recvdData + "\n" + s;
+}
+
+int main()
+{
+	int nx = 600;
+	int ny = 300;
+	int ns = 4;
+	std::string filename = "test3.ppm";
+
+	// fetch from max_threads number
+	int total_threads = std::thread::hardware_concurrency();
+	int max_threads = (total_threads - 1)*4;
+	std::cout << "available system threads: " << total_threads;
+	std::cout << "used system threads: " << max_threads;
+
+	int total_tiles = 60;
+	int tile_loops = total_threads / max_threads;
+
+	int ny_tile = ny / max_threads;
+
+	//hitable *list[5];
+	//list[0] = new sphere(vec3(0, 0, -1), 0.5, new lambertian(vec3(0.1, 0.2, 0.5)));
+	//list[1] = new sphere(vec3(0, -100.5, -1), 100, new lambertian(vec3(0.8, 0.8, 0.0)));
+	//list[2] = new sphere(vec3(1, 0, -1), 0.5, new metal(vec3(0.8, 0.6, 0.2), 0.2));
+	//list[3] = new sphere(vec3(-1, 0, -1), 0.5, new dielectric(1.5));
+	//list[4] = new sphere(vec3(-1, 0, -1), -0.45, new dielectric(1.5));
+	//hitable *world = new hitable_list(list, 5);
+
+	hitable *world = random_scene();
+
+	vec3 lookfrom(13, 2, 3);
+	vec3 lookat(0, 0, 0);
+	//float dist_to_focus = (lookfrom - lookat).length();
+	float dist_to_focus = 10.0;
+	float aperature = 0.1;
+
+	camera cam(lookfrom, lookat, vec3(0, 1, 0), 20, float(nx) / float(ny), aperature, dist_to_focus);
+
+	//// start time for render loop
+	//size_t start = time(NULL);
+
+	////int ystart = 0;
+	//render_loop(nx, ystart, ny, ns, world, cam);
+
+	//printf("**MyProgram::time elapsed= %lds\n", time(NULL) - start);
+
+	//--------------------------------
+	// thread with string return
+
+	// time using chrono
+	auto start_timer = std::chrono::steady_clock::now();
+
+	std::ofstream myfile(filename);
+	if (myfile.is_open()) {
+		myfile << "P3\n" << nx << " " << ny << "\n255\n";
+
+		std::vector<std::future<std::string>> futures_vector;
+		for (int i = max_threads-1; i >= 0; i--) {
+			int y_start = i * ny_tile;
+			int y_end = y_start + ny_tile;
+			std::cout << y_start << " " << y_end << std::endl;
+			//futures_vector.push_back(std::async(std::launch::async, fetchString, "Data", i));
+			//futures_vector.push_back(std::async(std::launch::async, render_loop_test, nx, ystart, ny, ns, world, cam));
+			futures_vector.push_back(std::async(std::launch::async, render_loop_test, nx, ny, y_start, y_end, ns, world, cam));
+		}
+
+		int current_threads_used = 0;
+		for (auto &e : futures_vector) {
+			// test ----------------
+			// Use wait_for() with zero milliseconds to check thread status.
+			auto status = e.wait_for(std::chrono::milliseconds(0));
+
+			// Print status.
+			if (status == std::future_status::ready) {
+				std::cout << "Thread finished" << std::endl;
+				current_threads_used--;
+			}
+			else {
+				std::cout << "Thread still running" << std::endl;
+				current_threads_used++;
+			}
+			std::cout << "current used threads: " << current_threads_used << std::endl;
+			// test ----------------
+			if (e.valid()) {
+				myfile << e.get();
+			}
+		}
+
+		myfile.close();
+	}
+	else std::cout << "Unable to open file";
+
+	// time when finished
+	auto end_timer = std::chrono::steady_clock::now();
+	auto diff = end_timer - start_timer;
+	std::cout << std::chrono::duration <double, std::milli>(diff).count() << " ms" << std::endl;
+	//--------------------------------
+
 	return 0;
 }
